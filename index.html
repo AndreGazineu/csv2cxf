@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Conversor CSV → CXF Detalhado</title>
+  <style>
+    body{
+      font-family:sans-serif;background:#f4f4f4;color:#333;
+      display:flex;flex-direction:column;align-items:center;padding:2rem;
+    }
+    .container{
+      background:#fff;padding:1.5rem;border-radius:10px;
+      box-shadow:0 2px 10px rgba(0,0,0,.1);
+      width:100%;max-width:600px;text-align:center;
+    }
+    input[type=file]{margin-bottom:1rem;}
+    button{
+      padding:10px 20px;background:#007BFF;color:#fff;border:none;
+      border-radius:5px;cursor:pointer;margin-top:10px;
+    }
+    button:hover{background:#0056b3;}
+    pre{
+      margin-top:1rem;padding:1rem;background:#eee;border:1px solid #ccc;
+      overflow-x:auto;max-height:300px;text-align:left;
+      white-space:pre-wrap;word-wrap:break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Conversor CSV → CXF Detalhado</h2>
+    <input type="file" id="csvFile" accept=".csv">
+    <button onclick="handleFile()">Converter e Baixar .cxf</button>
+    <pre id="log">Aguardando arquivo CSV...</pre>
+  </div>
+
+<script>
+function handleFile(){
+  const fileInput=document.getElementById('csvFile');
+  const log=document.getElementById('log');
+  const file=fileInput.files[0];
+
+  if(!file){log.textContent='Por favor, selecione um arquivo CSV.';return;}
+
+  log.textContent='Lendo arquivo...';
+  const reader=new FileReader();
+
+  reader.onload=e=>{
+    try{
+      const fileContent=e.target.result;
+      if(!fileContent) throw new Error('Arquivo CSV está vazio.');
+
+      const lines=fileContent.trim().split(/\r?\n/);
+      if(lines.length<2) throw new Error('Arquivo CSV não contém dados (apenas cabeçalho ou vazio).');
+
+      const headerLine=lines[0].startsWith('\uFEFF')?lines[0].substring(1):lines[0];
+      const headers=headerLine.split(',').map(h=>h.trim().toLowerCase());
+
+      const nameIdx=headers.findIndex(h=>h==='name'||h==='nome');
+      const lIdx   =headers.indexOf('l');
+      const aIdx   =headers.indexOf('a');
+      const bIdx   =headers.indexOf('b');
+
+      if([nameIdx,lIdx,aIdx,bIdx].some(idx=>idx===-1)){
+        console.error('Cabeçalhos encontrados:',headers);
+        throw new Error('Cabeçalhos esperados não encontrados: "name"/"nome", "L", "a", "b".');
+      }
+
+      log.textContent='Processando dados...';
+      const data=[];
+
+      for(let i=1;i<lines.length;i++){
+        const line=lines[i].trim();
+        if(line==='') continue;
+
+        const cols=line.split(',');
+        if(cols.length<=Math.max(nameIdx,lIdx,aIdx,bIdx)) continue;
+
+        let name=cols[nameIdx]?.trim()||`Cor_${i}`;
+        if(name.startsWith('"')&&name.endsWith('"')) name=name.slice(1,-1).trim();
+
+        const l=parseFloat(cols[lIdx]);
+        const a=parseFloat(cols[aIdx]);
+        const b=parseFloat(cols[bIdx]);
+
+        if([l,a,b].some(n=>isNaN(n))) continue;
+
+        data.push({name,L:l,a,b});
+      }
+
+      if(!data.length) throw new Error('Nenhuma linha de dados válida encontrada.');
+
+      log.textContent=`Gerando CXF com ${data.length} cores...`;
+      const xml=generateCXF(data,file.name);
+      const blob=new Blob([xml],{type:'application/xml;charset=utf-8'});
+      const link=document.createElement('a');
+      link.href=URL.createObjectURL(blob);
+      link.download=`${file.name.replace(/\.[^/.]+$/,'')}_convertido.cxf`;
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      log.textContent=`Conversão concluída! ${data.length} cores processadas.`;
+    }catch(err){
+      log.textContent=`Erro: ${err.message}`;console.error(err);
+    }
+  };
+  reader.onerror=()=>{log.textContent='Erro ao ler o arquivo.';};
+  reader.readAsText(file,'UTF-8');
+}
+
+/* ---------- CXF ---------- */
+function generateCXF(data,originalFilename){
+  const uuid=()=> 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{
+    const r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);
+  });
+  const nowISO=new Date().toISOString();
+
+  const escapeXML=str=>String(str)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&apos;');
+
+  const header=`<?xml version="1.0" encoding="UTF-8"?>
+<cc:CxF xmlns:cc="http://colorexchangeformat.com/CxF3-core"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <cc:FileInformation>
+    <cc:Creator>Conversor CSV-CXF</cc:Creator>
+    <cc:Description>Gerado a partir de ${escapeXML(originalFilename)}</cc:Description>
+    <cc:Tag Name="FileType" Value="Color Library"/>
+    <cc:Tag Name="IsReadOnly" Value="False"/>
+  </cc:FileInformation>
+  <cc:Resources>`;
+
+  const objects=data.map((c,i)=>`
+    <cc:Object ObjectType="Standard" Name="${escapeXML(c.name)}" Id="R${i}" GUID="${uuid()}">
+      <cc:CreationDate>${nowISO}</cc:CreationDate>
+      <cc:ColorValues>
+        <cc:ColorCIELab ColorSpecification="CSM0D502">
+          <cc:L>${c.L.toFixed(2)}</cc:L>
+          <cc:A>${c.a.toFixed(2)}</cc:A>
+          <cc:B>${c.b.toFixed(2)}</cc:B>
+        </cc:ColorCIELab>
+      </cc:ColorValues>
+    </cc:Object>`).join('');
+
+  const objectCollection=`
+  <cc:ObjectCollection>${objects}
+  </cc:ObjectCollection>`;
+
+  const colorSpecifications=`
+  <cc:ColorSpecificationCollection>
+    <cc:ColorSpecification Id="CSM0D502">
+      <cc:TristimulusSpec>
+        <cc:Illuminant>D50</cc:Illuminant>
+        <cc:Observer>2_Degree</cc:Observer>
+        <cc:Method>E308_Table5</cc:Method>
+      </cc:TristimulusSpec>
+      <cc:MeasurementSpec>
+        <cc:MeasurementType>Colorimetric_Reflectance</cc:MeasurementType>
+        <cc:GeometryChoice>
+          <cc:SingleAngle>
+            <cc:SingleAngleConfiguration>Annular</cc:SingleAngleConfiguration>
+            <cc:IlluminationAngle>45</cc:IlluminationAngle>
+            <cc:MeasurementAngle>0.0</cc:MeasurementAngle>
+          </cc:SingleAngle>
+        </cc:GeometryChoice>
+        <cc:WavelengthRange StartWL="400" Increment="10"/>
+        <cc:CalibrationStandard/>
+        <cc:Aperture>SAV</cc:Aperture>
+        <cc:Device>
+          <cc:Model/>
+          <cc:DeviceFilter>Filter_None</cc:DeviceFilter>
+          <cc:DevicePolarization>false</cc:DevicePolarization>
+        </cc:Device>
+      </cc:MeasurementSpec>
+    </cc:ColorSpecification>
+  </cc:ColorSpecificationCollection>`;
+
+  const resourcesFooter=`</cc:Resources>`;
+
+  const toleranceSets=data.map((c,i)=>`
+    <et:QCSet Name="${escapeXML(c.name)}" StandardRef="R${i}">
+      <et:ToleranceSet ColorSpecification="CSM0D502">
+        <et:CIELabTolerances>
+          <et:dE2000Tol>
+            <et:dE>1.5</et:dE><et:kL>1</et:kL><et:kC>1</et:kC><et:kH>1</et:kH>
+          </et:dE2000Tol>
+        </et:CIELabTolerances>
+      </et:ToleranceSet>
+    </et:QCSet>`).join('');
+
+  const customResources=`
+  <cc:CustomResources>
+    <et:eXactTolerancing xmlns:et="http://colorexchangeformat.com/CxF3-eXactTolerancing" Name="Tolerancias Geradas">
+      ${toleranceSets}
+    </et:eXactTolerancing>
+  </cc:CustomResources>`;
+
+  return header+objectCollection+colorSpecifications+resourcesFooter+customResources+'\n</cc:CxF>';
+}
+</script>
+</body>
+</html>
